@@ -25,6 +25,7 @@ from   sklearn.preprocessing   import StandardScaler, MinMaxScaler
 import matplotlib.pyplot       as     plt
 
 import argparse
+import unittest
 
 #set random numbers for consistency between this run and 
 #future use
@@ -150,7 +151,8 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
              params = ['b_x_SW',     'b_y_SW',    'b_z_SW',   'b_mag_SW',
                         'v_x_SW',    'v_y_SW',    'v_z_SW',   'v_mag_SW', 
                         'tp_SW',      'np_SW'],    
-             getOrb = False, saveModelResults = False, saveMAVENData = False, returnOriginal = False, verbose = False):
+             getOrb = False, saveModelResults = False, saveMAVENData = False, returnOriginal = False, verbose = False,
+             spacecraftData = None):
     
     '''
     Run the vSWIM model over a set period of time at a cadence in seconds. 
@@ -187,8 +189,11 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
             raise ValueError('{} is not within valid solar wind options: {}'.format(p_i, fullParams))
                 
     #read in maven if passed checks
-    print("Reading in original MAVEN files.")
-    maven = getMAVENData(saveMAVENData)
+    if spacecraftData is None:
+        print("Reading in original MAVEN files.")
+        maven = getMAVENData(saveMAVENData)
+    else:
+        maven = spacecraftData
     
     #check if user picked a valid date of MAVEN
     if ((startDate < pd.to_datetime(maven[::subsetSize].date_SW.values[0])) | 
@@ -212,7 +217,7 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
 
 
     results['gap']      = np.nan
-
+    
     if getOrb:
         
         print('Generating MAVEN orbit information.')
@@ -273,7 +278,6 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
                 print('\nOn {} / {} segments'.format(i + 1, len(arrEnum)))
 
         data = maven[maven[maven.SubsetIndex == o].index[0]:maven[maven.SubsetIndex == o + 1].index[1]]
-
 
         indResults = ((results['date_[utc]'] >= data.date_SW.values[0]) & 
                         (results['date_[utc]'] < data.date_SW.values[-1]))
@@ -337,8 +341,10 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
 
             #----------and now save results
 
-
-            X_model = mmScaler.transform(results.loc[indResults, 'date_[unix]'].values.reshape(-1, 1))
+            try:
+                X_model = mmScaler.transform(results.loc[indResults, 'date_[unix]'].values.reshape(-1, 1))
+            except:
+                breakpoint()
 
             mean_model, var_model = model.predict_y(X_model)
             mean_model = np.array(mean_model)
@@ -382,6 +388,78 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
 
     else:
         return(results)
+
+
+class TestvSWIM(unittest.TestCase):
+    @classmethod
+    def setUpClass(self):
+        from sklearn.model_selection import GroupShuffleSplit
+        
+        mean_gap_size = 0.5 # Days
+        test_cadence = 2*60 # s
+        test_date = np.arange(dt.datetime(2000, 1, 1), dt.datetime(2000, 4, 1), dt.timedelta(seconds=test_cadence)).astype(dt.datetime)
+        test_df = pd.DataFrame({'date_SW': test_date})
+        
+        # Add unix date and artifical solar wind signal as v_mag_SW
+        test_df['date_SW_unix'] = (test_df['date_SW'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
+        rng = np.random.default_rng()
+        test_df['v_mag_SW'] = 400 + 100 * np.sin(np.linspace(0, 2*np.pi, len(test_df))) + 10 * np.sin(np.linspace(0, 20*np.pi, len(test_df))) + rng.normal(0, 1, len(test_df))
+        
+        # Drop groups of the data to simulate partial solar wind coverage
+        test_groups = np.arange(len(test_date)) // (mean_gap_size*24*60*60/test_cadence)
+        
+        # Split times into groups, then randomly select groups to drop
+        gss = GroupShuffleSplit(n_splits=1, train_size=0.80, random_state=42)
+        keep_groups, lose_groups = next(gss.split(test_date, groups=test_groups))
+        
+        # Drop lose_groups in new df
+        keep_df = test_df.drop(index=lose_groups)
+        keep_df.reset_index(inplace=True, drop=True)
+        lose_df = test_df.drop(index=keep_groups)
+        lose_df.reset_index(inplace=True, drop=True)
+        
+        # Add SubsetIndex so test_spacecraft_df can be passed to runvSWIM
+        keep_df['SubsetIndex'] = keep_df.index // subsetSize
+        
+        self.test_df = test_df
+        self.keep_df = keep_df
+        self.lose_df = lose_df
+        
+        test_model_df = runvSWIM(startDate=dt.datetime(2000,1,5), stopDate=dt.datetime(2000,3,25), 
+                                 cadence=3600, params=['v_mag_SW'], 
+                                 spacecraftData = self.keep_df)
+        
+        self.test_model_df = test_model_df
+        
+        
+        df = lose_df.query("@test_model_df['date_[utc]'].iloc[0] < date_SW < @test_model_df['date_[utc]'].iloc[-1]")
+        mu_interp = np.interp(df['date_SW_unix'],test_model_df['date_[unix]'], test_model_df['mu_v_mag_SW'])
+        sigma_interp = np.interp(df['date_SW_unix'], test_model_df['date_[unix]'], test_model_df['sigma_v_mag_SW'])
+        
+        ZScore = (df['v_mag_SW'] - mu_interp) / sigma_interp
+        self.ZScore = ZScore
+        
+        fig, ax = plt.subplots()
+        ax.hist(ZScore, bins=np.arange(-4, 4, 0.1))
+        ax.axvline(ZScore.mean(), color='black', lw=1)
+        ax.axvline(ZScore.mean()+ZScore.std(), color='black', lw=1, ls=':')
+        ax.axvline(ZScore.mean()-ZScore.std(), color='black', lw=1, ls=':')
+        ax.annotate((r"$\mu$ = {0:.3f}"+"\n"+r"$\sigma$ = {1:.3f}").format(ZScore.mean(), ZScore.std()),
+                    (0,1), (1,-1), xycoords='axes fraction', textcoords='offset fontsize', 
+                    ha='left', va='top')
+        
+        if ZScore.mean() < -0.1:
+            breakpoint()
+        return
+        
+    def test_mean(self):
+        message = "Absolute Mean of the Z-Score > 0.10!"
+        self.assertAlmostEqual(self.ZScore.mean(), 0, delta=0.10, msg=message)
+
+        
+    def test_std(self):
+        message = "Absolute Standadrd Deviation of the Z-Score > 0.10!"
+        self.assertAlmostEqual(self.ZScore.std(), 1, delta=0.10, msg=message)
 
 if __name__ == "__main__":
     
