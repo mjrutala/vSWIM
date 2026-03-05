@@ -24,7 +24,7 @@ import datetime                as     dt
 from   sklearn.preprocessing   import StandardScaler, MinMaxScaler
 import matplotlib.pyplot       as     plt
 
-import argparse
+
 import unittest
 
 #set random numbers for consistency between this run and 
@@ -337,7 +337,7 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
             opt.minimize(model.training_loss, model.trainable_variables)
 
             if verbose: 
-                gpflow.utilities.print_summary(model, "notebook")
+                gpflow.utilities.print_summary(model) #, "notebook")
 
             #----------and now save results
 
@@ -461,23 +461,23 @@ class TestvSWIM(unittest.TestCase):
         message = "Absolute Standadrd Deviation of the Z-Score > 0.10!"
         self.assertAlmostEqual(self.ZScore.std(), 1, delta=0.10, msg=message)
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
     
         
-    #add command line functionality
-    parser = argparse.ArgumentParser()
+#     #add command line functionality
+#     parser = argparse.ArgumentParser()
     
-    parser.add_argument("--start_date", type=dt.datetime.fromisoformat, default="2015-01-01", help="start date in any ISO format")
-    parser.add_argument("--end_date", type=dt.datetime.fromisoformat, default="2015-01-04", help="start date in any ISO format")
-    parser.add_argument("--cadence", type=int, default=1, help="interpolation cadence in seconds")
-    parser.add_argument("--params_list", type=str, nargs='+', default = ['v_x_SW'], help="solar wind parameters to interpolate, "+\
-                                                                                         "list any of:  b_x_SW, b_y_SW, b_z_SW, b_mag_SW, "+\
-                                                                                         "v_x_SW, v_y_SW, v_z_SW, v_mag_SW, tp_SW,  np_SW" )
+#     parser.add_argument("--start_date", type=dt.datetime.fromisoformat, default="2015-01-01", help="start date in any ISO format")
+#     parser.add_argument("--end_date", type=dt.datetime.fromisoformat, default="2015-01-04", help="start date in any ISO format")
+#     parser.add_argument("--cadence", type=int, default=1, help="interpolation cadence in seconds")
+#     parser.add_argument("--params_list", type=str, nargs='+', default = ['v_x_SW'], help="solar wind parameters to interpolate, "+\
+#                                                                                          "list any of:  b_x_SW, b_y_SW, b_z_SW, b_mag_SW, "+\
+#                                                                                          "v_x_SW, v_y_SW, v_z_SW, v_mag_SW, tp_SW,  np_SW" )
 
-    parser.add_argument("--get_orb", action="store_false", help="include orbital information")
-    parser.add_argument("--save_model_results", action="store_false", help="save model results to csv in the data folder")
-    parser.add_argument("--save_maven_data", action="store_false", help="save a copy of the original MAVEN data in the data folder")
-    parser.add_argument("--return_original", action="store_false", help="returns a copy of the original MAVEN data to user")
-    parser.add_argument("--verbose", action="store_false", help="increase output verbosity")
+#     parser.add_argument("--get_orb", action="store_false", help="include orbital information")
+#     parser.add_argument("--save_model_results", action="store_false", help="save model results to csv in the data folder")
+#     parser.add_argument("--save_maven_data", action="store_false", help="save a copy of the original MAVEN data in the data folder")
+#     parser.add_argument("--return_original", action="store_false", help="returns a copy of the original MAVEN data to user")
+#     parser.add_argument("--verbose", action="store_false", help="increase output verbosity")
     
-    args = parser.parse_args()
+#     args = parser.parse_args()
