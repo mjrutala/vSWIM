@@ -24,7 +24,8 @@ import datetime                as     dt
 from   sklearn.preprocessing   import StandardScaler, MinMaxScaler
 import matplotlib.pyplot       as     plt
 
-
+import time
+import tqdm
 import unittest
 
 #set random numbers for consistency between this run and 
@@ -262,7 +263,7 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
     
     arrEnum  = np.arange(indexStart, indexStop, 1)
     
-    for i, o in enumerate(arrEnum):
+    for i, o in enumerate(tqdm.tqdm(arrEnum, desc='Segments', position=0)):
 
 
         #if short, print everyone
@@ -292,7 +293,7 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
                                                     data.date_SW_unix.values.reshape(-1, 1)), 1) / (60*60*24),
                                                     decimals = 3)
 
-        for p in params:
+        for p in tqdm.tqdm(params, desc='Solar Wind Parameters', leave=False, position=1):
 
             if verbose:
                 print(p)
@@ -333,9 +334,9 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
             model = gpflow.models.GPR((X_normed_train, y_normed_train), kernel=signal_kernel)
 
             opt = gpflow.optimizers.Scipy()
-
+            t0 = time.time()
             opt.minimize(model.training_loss, model.trainable_variables)
-
+            print("Model trained in {}s".format(time.time() - t0))
             if verbose: 
                 gpflow.utilities.print_summary(model) #, "notebook")
 
@@ -346,9 +347,20 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
             except:
                 breakpoint()
 
-            mean_model, var_model = model.predict_y(X_model)
-            mean_model = np.array(mean_model)
-            var_model = np.array(var_model)
+            # mean_model, var_model = model.predict_y(X_model)
+            
+            # mean_model = np.array(mean_model)
+            # var_model = np.array(var_model)
+            
+            # Replace sampling with embarssingly parallel sampling
+            from joblib import Parallel, delayed
+            import multiprocessing
+            n_cpus = multiprocessing.cpu_count() - 1
+            X_model_segments = np.array_split(X_model, n_cpus)
+            pred_y = Parallel(n_jobs=n_cpus)(delayed(model.predict_y)(_X) for _X in X_model_segments)
+            
+            mean_model = np.concatenate([py[0] for py in pred_y])
+            var_model = np.concatenate([py[1] for py in pred_y])
 
             std_model = np.sqrt(var_model)
 
