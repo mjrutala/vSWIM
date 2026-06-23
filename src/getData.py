@@ -49,9 +49,9 @@ def MAVEN(save = False):
     
     # Expected column names
     colNames = ['date_str', 
-                'n_p', 'n_alpha', 
+                'n_p', 'n_a',
                 'v_mag', 'v_x', 'v_y', 'v_z', 
-                'tp', 
+                't_p', 
                 'b_x', 'b_y', 'b_z']
     
     # Enable offline runs: check if a downloaded file exists, 
@@ -71,13 +71,15 @@ def MAVEN(save = False):
 
     maven['v_mag'] = np.sqrt(maven.v_x**2.0 + maven.v_y**2.0 + maven.v_z**2.0)
     
+   
+    
     if save:
         data_dir = constants()['data_dir']
         
         print("Saving data from https://homepage.physics.uiowa.edu/~jhalekas/drivers.html, see Halekas et al., 2017 to {}.".format(data_dir))
         maven.to_csv(data_dir / 'halekas2017_drivers_merge_l2_hires.csv', index=False)
 
-    return maven
+    return maven.drop(columns=['n_a'])
 
 def MEX(save = False, maximum_flag = 0):
     
