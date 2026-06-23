@@ -24,6 +24,11 @@ import datetime                as     dt
 from   sklearn.preprocessing   import StandardScaler, MinMaxScaler
 import matplotlib.pyplot       as     plt
 
+import getData
+from astropy.time import Time
+from joblib import Parallel, delayed
+import multiprocessing
+
 import time
 import tqdm
 import unittest
@@ -43,9 +48,9 @@ max_l      = 0.5
 init_var   = 3
 
 #full set of solar wind parameters
-fullParams = ['b_x_SW',     'b_y_SW',    'b_z_SW',   'b_mag_SW',
-              'v_x_SW',     'v_y_SW',    'v_z_SW',   'v_mag_SW', 
-              'tp_SW',      'np_SW']
+fullParams = ['b_x',     'b_y',    'b_z',   'b_mag',
+              'v_x',     'v_y',    'v_z',   'v_mag', 
+              't_p',      'n_p']
 
 
 def getOrbitalData():
@@ -85,75 +90,26 @@ def getOrbitalData():
     return(orbs, apoDates)
 
 
-
-def getMAVENData(saveMAVENData = False):
+def formatSpacecraftData(df):
     
-    '''
-    Downloads data from Jasper Halekas' merged data product online at:
-    https://homepage.physics.uiowa.edu/~jhalekas/drivers/drivers_merge_l2_hires.txt
-
-    See Halekas et al., 2017 for relevant information on the original merged product. 
-
-    See Halekas et al., 2015, Connerney et al. 2015 for original instrument papers.
+    # Add subset indices
+    numSubsets = int(len(df) / subsetSize)
     
-    Defaults to not saving file on local drive. 
-    
-    If save file is enabled, will save to ./Data/drivers_merge_l2_hires.txt on local file
-    diretory. 
-    '''
+    # NOTE: code previously excluded subsets < 1000 elements long
+    # This has been removed to allow small dataset usage
+    df['SubsetIndex'] = [int(s) for s in np.arange(len(df))/1000]
+    if (df['SubsetIndex'] == df['SubsetIndex'].max()).sum() < 500:
+        df.loc[df['SubsetIndex'] == df['SubsetIndex'].max(), 'SubsetIndex'] = df['SubsetIndex'].max() - 1
 
-    mav_file = 'https://homepage.physics.uiowa.edu/~jhalekas/drivers/drivers_merge_l2_hires.txt'
-
-    #read in Halekas file (direct measurements)
-    colNames = ['date', 'np_SW', 'nalpha_SW', 'v_SW', 
-                'v_x_SW', 'v_y_SW', 'v_z_SW', 'tp_SW', 
-                'b_x_SW', 'b_y_SW', 'b_z_SW']
-
-    maven = pd.read_csv(mav_file, names = colNames, index_col = False, sep = r'\s+')
-    
-
-    maven['date_SW'] = pd.to_datetime(maven['date'])
-
-    maven['date_SW_unix'] = (maven['date_SW'] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
-
-    maven['b_mag_SW'] = np.sqrt(maven.b_x_SW**2.0 + maven.b_y_SW**2.0 + maven.b_z_SW**2.0)
-
-    maven['v_mag_SW'] = np.sqrt(maven.v_x_SW**2.0 + maven.v_y_SW**2.0 + maven.v_z_SW**2.0)
-    
-    if saveMAVENData:
-
-        locResults = './results/'
-
-        try:
-            os.mkdir(locResults)
-        
-        except:
-          #if directory already exists do nothing  
-          pass
-
-        print("Saving data from https://homepage.physics.uiowa.edu/~jhalekas/drivers.html, see Halekas et al., 2017 to {}.".format(locResults))
-        
-        maven.to_csv('{}halekas2017_drivers_merge_l2_hires.csv'.format(locResults))
-
-    #smallest number of subsets, only count full subsets 
-    
-    numSubsets = int(len(maven) / subsetSize)
-
-    maven['SubsetIndex'] = np.nan
-
-    for i in np.arange(0, numSubsets):
-
-        maven.loc[i * subsetSize : i * subsetSize + subsetSize - 1, 'SubsetIndex'] = i
-    
-    return(maven)
+    return df
     
 
 def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015, 1,  4), cadence = 60*60, 
-             params = ['b_x_SW',     'b_y_SW',    'b_z_SW',   'b_mag_SW',
-                        'v_x_SW',    'v_y_SW',    'v_z_SW',   'v_mag_SW', 
-                        'tp_SW',      'np_SW'],    
-             getOrb = False, saveModelResults = False, saveMAVENData = False, returnOriginal = False, verbose = False,
-             spacecraftData = None):
+             params = ['b_x', 'b_y', 'b_z', 'b_mag',
+                       'v_x', 'v_y', 'v_z', 'v_mag', 
+                       't_p', 'n_p'],    
+             getOrb = False, saveModelResults = False, saveSourceData = False, returnOriginal = False, verbose = False,
+             sourceData = 'MAVEN'):
     
     '''
     Run the vSWIM model over a set period of time at a cadence in seconds. 
@@ -164,9 +120,9 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
     If you want to save the results of the model to the Data folder
     use saveModelResults = True.
     
-    You can run any of the following parameters: b_x_SW, b_y_SW, b_z_SW, b_mag_SW,
-                                                 v_x_SW, v_y_SW, v_z_SW, v_mag_SW, 
-                                                 tp_SW,  np_SW
+    You can run any of the following parameters: b_x, b_y, b_z, b_mag,
+                                                 v_x, v_y, v_z, v_mag, 
+                                                 t_p,  n_p
                                                  
     Note 1: future improvements will have user input checks.
     
@@ -189,25 +145,30 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
         if not p_i in fullParams:           
             raise ValueError('{} is not within valid solar wind options: {}'.format(p_i, fullParams))
                 
-    #read in maven if passed checks
-    if spacecraftData is None:
-        print("Reading in original MAVEN files.")
-        maven = getMAVENData(saveMAVENData)
+    # If sourceData is a string, read the correct spacecraft; else, use as-is
+    if type(sourceData) is str:
+        match sourceData.upper():
+            case 'MAVEN':
+                insitu_df = getData.MAVEN(saveSourceData)
+            case 'MEX':
+                insitu_df = getData.MEX(saveSourceData)
     else:
-        maven = spacecraftData
+        insitu_df = sourceData
+        
+    insitu_df = formatSpacecraftData(insitu_df)
     
-    #check if user picked a valid date of MAVEN
-    if ((startDate < pd.to_datetime(maven[::subsetSize].date_SW.values[0])) | 
-        (stopDate  > pd.to_datetime(maven[::subsetSize].date_SW.values[-2]))):
-        raise ValueError('Can only run from {} to {}, pick new time range.'.format(
-                                        pd.to_datetime(maven[::subsetSize].date_SW.values[0]),
-                                        pd.to_datetime(maven[::subsetSize].date_SW.values[-2])))
+    #check if selected dates are valid
+    if ((startDate < insitu_df.datetime.min()) | 
+        (stopDate  > insitu_df.datetime.max())):
+        raise ValueError(
+            'Can only run from {} to {}, pick new time range.'.format(
+            insitu_df.date_SW.min(), insitu_df.date_SW.max()))
+        
+    startSubsets = insitu_df[::subsetSize]
     
-    startSubsets = maven[::subsetSize]
-
-    indexStart = startSubsets.loc[startSubsets['date_SW'] <= startDate, 'SubsetIndex'].values[-1]
-    indexStop  = startSubsets.loc[startSubsets['date_SW'] >= stopDate,  'SubsetIndex'].values[0]
-
+    indexStart = startSubsets.loc[startSubsets['datetime'] <= startDate, 'SubsetIndex'].values[-1]
+    indexStop  = startSubsets.loc[startSubsets['datetime'] >= stopDate,  'SubsetIndex'].values[0]
+    
     results = pd.DataFrame()
 
     results['date_[utc]']  = pd.to_datetime(np.arange(startDate, stopDate, 
@@ -258,45 +219,30 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
         results['mu_{}_normed'.format(p)]     = np.nan
 
         results['sigma_{}_normed'.format(p)]  = np.nan
-
-
     
     arrEnum  = np.arange(indexStart, indexStop, 1)
     
-    for i, o in enumerate(tqdm.tqdm(arrEnum, desc='Segments', position=0)):
+    for i, o in enumerate(tqdm.tqdm(arrEnum, desc='Processing segments', position=0)):
+        
+        data = insitu_df.query("SubsetIndex == @o")
+        
+        indResults = ((results['date_[utc]'] >= data.datetime.values[0]) & 
+                        (results['date_[utc]'] < data.datetime.values[-1]))
 
+        
+        # X_train = data['date_SW_unix'].values.reshape(-1, 1) 
+        X_train = Time(data['datetime']).mjd[:,None]
 
-        #if short, print everyone
-        if len(arrEnum) < 10:
-            
-            print('\nOn {} / {} segments'.format(i + 1, len(arrEnum)))
+        # Sizes of gaps, in days
+        dist_matrix = cdist(
+            Time(results.loc[indResults, 'date_[utc]']).mjd[:,None], 
+            Time(data['datetime']).mjd[:,None])
+        results.loc[indResults, 'gap'] = np.around(np.min(dist_matrix, 1), decimals = 3)
+        
+        for p in tqdm.tqdm(params, desc='Processing [{}]'.format(', '.join(params)), leave=False, position=1):
 
-        #if long, print every 5
-        else:
-            
-            if ((i % 5) == 0):
-
-                print('\nOn {} / {} segments'.format(i + 1, len(arrEnum)))
-
-        data = maven[maven[maven.SubsetIndex == o].index[0]:maven[maven.SubsetIndex == o + 1].index[1]]
-
-        indResults = ((results['date_[utc]'] >= data.date_SW.values[0]) & 
-                        (results['date_[utc]'] < data.date_SW.values[-1]))
-
-
-
-        X_train = data['date_SW_unix'].values.reshape(-1, 1) 
-
-
-        results.loc[indResults, 'gap'] = np.around(np.min(cdist(results.loc[indResults, 
-                                                                'date_[unix]'].values.reshape(-1, 1),
-                                                    data.date_SW_unix.values.reshape(-1, 1)), 1) / (60*60*24),
-                                                    decimals = 3)
-
-        for p in tqdm.tqdm(params, desc='Solar Wind Parameters', leave=False, position=1):
-
-            if verbose:
-                print(p)
+            # if verbose:
+            #     print(p)
 
             y_train = data['{}'.format(p)].values.reshape(-1, 1)
 
@@ -336,25 +282,15 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
             opt = gpflow.optimizers.Scipy()
             t0 = time.time()
             opt.minimize(model.training_loss, model.trainable_variables)
-            print("Model trained in {}s".format(time.time() - t0))
-            if verbose: 
-                gpflow.utilities.print_summary(model) #, "notebook")
+            # print("Model trained in {}s".format(time.time() - t0))
+            # if verbose: 
+            #     gpflow.utilities.print_summary(model) #, "notebook")
 
             #----------and now save results
 
-            try:
-                X_model = mmScaler.transform(results.loc[indResults, 'date_[unix]'].values.reshape(-1, 1))
-            except:
-                breakpoint()
+            X_model = mmScaler.transform(Time(results.loc[indResults, 'date_[utc]']).mjd.reshape(-1, 1))
 
-            # mean_model, var_model = model.predict_y(X_model)
-            
-            # mean_model = np.array(mean_model)
-            # var_model = np.array(var_model)
-            
-            # Replace sampling with embarssingly parallel sampling
-            from joblib import Parallel, delayed
-            import multiprocessing
+            # Replace sampling with embarassingly parallel sampling
             n_cpus = multiprocessing.cpu_count() - 1
             X_model_segments = np.array_split(X_model, n_cpus)
             pred_y = Parallel(n_jobs=n_cpus)(delayed(model.predict_y)(_X) for _X in X_model_segments)
@@ -396,10 +332,10 @@ def runvSWIM(startDate = dt.datetime(2015, 1,  1), stopDate  = dt.datetime(2015,
 
     if returnOriginal: 
         
-        return(maven, results)
+        return insitu_df, results
 
     else:
-        return(results)
+        return results
 
 
 class TestvSWIM(unittest.TestCase):
