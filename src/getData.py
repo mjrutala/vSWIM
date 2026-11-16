@@ -474,6 +474,7 @@ def InstantanousSynodicCarringtonPeriod(df):
                     epochs={'start': df['datetime'].min().strftime('%Y-%m-%d'), 
                             'stop': (df['datetime'].max() + dt.timedelta(days=1)).strftime('%Y-%m-%d'), 
                             'step': '1d'})
+    
     mars_vectors = mars.vectors().to_pandas()
 
     # r_vec = np.hstack([mars_vectors[['x', 'y']].to_numpy(), np.zeros((mars_vectors.shape[0],1))])
