@@ -98,7 +98,7 @@ def velocity_from_stats(df, n_samples):
     samples = np.zeros((df.shape[0], 3, n_samples))
     # This is independent of row, so just do 10_000ish at a time
     row_indices = np.arange(0, df.shape[0], 1)
-    n_chunks = int(df.shape[0]/10_000) 
+    n_chunks = int(np.ceil(df.shape[0]/10_000))
     # if df.shape[0] > 0:
     #     with tqdm.tqdm(total=df.shape[0]) as pbar:
     #         for sub_row_indices in np.array_split(row_indices, n_chunks):
