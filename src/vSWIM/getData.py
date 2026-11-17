@@ -13,6 +13,7 @@ from astropy.time import Time
 import astropy.units as u
 import datetime as dt
 from pathlib import Path
+import requests
 
 r_M = 3396.19
 
@@ -35,6 +36,37 @@ def constants():
             path.mkdir(parents=True, exist_ok=True)
             
     return d
+
+def download(url, path, if_new=True):
+    # url = Path(url)
+    path = Path(path)
+    
+    if if_new is True:
+        # If the file does not exist, any online version is newer
+        if not path.exists():
+            path_datetime = dt.datetime.fromtimestamp(
+                0, tz=dt.timezone.utc
+                ).replace(tzinfo=None)
+        else:
+            path_datetime = dt.datetime.fromtimestamp(
+                path.stat().st_mtime, tz=dt.timezone.utc
+                ).replace(tzinfo=None)
+    
+    with requests.get(url, stream=True) as response:
+        response.raise_for_status()
+        if if_new:
+            response_datetime = dt.datetime.strptime(
+                response.headers['Last-Modified'], "%a, %d %b %Y %H:%M:%S GMT"
+                )
+            new = response_datetime > path_datetime
+        
+        if new:
+            with open(path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    file.write(chunk)
+    
+    return path
+
 
 def MAVEN(save = False, sigmas=None):
     
@@ -92,6 +124,31 @@ def MAVEN(save = False, sigmas=None):
             maven[key] = val
             
     return maven
+
+def MEX_aswi(save = True, sigmas=None, flag=0):
+    url = ('https://iswa.ccmc.gsfc.nasa.gov/iswa_data_tree/observation/'
+           'planetary/MarsExpress/ASPERA3_IMA/SolarWindMoments/' 
+           'MomentsScan.ascii')
+    path = constants()['data_dir'] / "MarsExpress_SolarWindMoments.txt"
+    
+    if save:
+        download(url, path, if_new=True)
+    
+    # Expected column names
+    colNames = ['datetime', 'n_p', 'v_mag', 't', 'flag']
+    
+    # Enable offline runs: check if a downloaded file exists, 
+    # and read that instead if available
+    if save:
+        data = pd.read_csv(path, skiprows=22, sep=r'\s+', names=colNames)
+    else:
+        data = pd.read_url(url, skiprows=22, sep=r'\s+', names=colNames)
+    data['datetime'] = pd.to_datetime(data['datetime']).dt.tz_convert(None)
+    data = data.loc[data['v_mag'] > 0.0,:]
+    data = data.query("flag == @flag")
+    data = data.reset_index(drop=True)
+    
+    return data
 
 def MEX(save = False, maximum_flag = 0, sigmas=None):
     
